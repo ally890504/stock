@@ -19,7 +19,7 @@ import requests
 import yfinance as yf
 
 # ==================== [ 雲端試算表設定 ] ====================
-SHEET_ID = "1BgoxBaTziSbMp0F5DiOCVzS3qBt0RKp33UkJluU3YCE"  # 👈 請在此處貼上你的試算表 ID
+SHEET_ID = "1BgoxBaTziSbMp0F5DiOCVzS3qBt0RKp33UkJluU3YCE"  # 👈 你的試算表 ID
 SHEET_NAME = "stocks"
 
 # 萬一試算表抓不到時的「備援清單」，避免每日排程整個掛掉
@@ -28,7 +28,7 @@ DEFAULT_TICKERS = pd.DataFrame(
         "ticker": ["2317", "2330", "0050", "6669"],
         "name": ["鴻海", "台積電", "元大台灣50", "緯穎"],
         "category": ["AI代工組合", "半導體組合", "ETF組合", "AI代工組合"],
-        "cost": [180, 1080, 150, 2000],  # 👈 幫備援清單填入測試成本，或維持 None 但確保它是 float 類型
+        "cost": [180, 1080, 150, 2000],  # 測試成本
     }
 )
 # ==========================================================
@@ -138,7 +138,7 @@ NEG_WORDS = ["否認", "不", "未", "無", "沒", "免", "非"]
 
 # ===== 發佈到網路（GitHub Pages）=====
 GITHUB_USER = ""  # 你的 GitHub 帳號
-GITHUB_REPO = ""  # 你建立的 repo 名稱，例如 stock
+GITHUB_REPO = ""  # 你建立的 repo 名稱
 GITHUB_TOKEN = ""  # 你的存取權杖
 GITHUB_BRANCH = "main"
 
@@ -152,12 +152,18 @@ def load_from_sheets():
     try:
         # dtype={'ticker': str} 確保 0050 的 0 不會消失
         df = pd.read_csv(url, dtype={"ticker": str})
+        
+        # 清除欄位名稱的空白符號，確保後續讀取順利
+        df.columns = df.columns.str.strip()
+        
+        # 排除 ticker 欄位為空值的資料列
         df = df.dropna(subset=["ticker"])
-        df["ticker"] = df["ticker"].str.strip()
+        df["ticker"] = df["ticker"].astype(str).str.strip()
+        
         if df.empty:
             raise ValueError("試算表裡沒有任何股票資料")
 
-        # 處理 cost 欄位，轉為數值型態，無法轉換的會變成 NaN (等同原本的 None)
+        # 處理 cost 欄位，轉為數值型態，無法轉換的會變成 NaN
         if "cost" in df.columns:
             df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
         else:
@@ -284,7 +290,7 @@ def fetch_news(max_items=NEWS_POOL):
                 continue
             seen.add(title)
             if src and title.endswith(" - " + src):
-                title = title : -(len(src) + 3)
+                title = title[: -(len(src) + 3)]
             try:
                 dt = parsedate_to_datetime(pub)
             except Exception:
@@ -645,8 +651,7 @@ def main():
     results.sort(key=lambda x: x["score"], reverse=True)
     mkt_text, mkt_cls = market_status()
 
-    # 持股／觀察清單的好價格：直接篩選出有設定成本(cost)或在試算表中列出的特定股票
-    # 這裡的邏輯改為：只要試算表裡有這隻股票，就自動幫它算好價格（如果 cost 欄位是 NaN 就不計算個人損益）
+    # 持股／觀察清單的好價格：直接篩選出在試算表中列出的所有股票
     hold_items = []
     for _, row in df_cloud.iterrows():
         code = row["ticker"]
