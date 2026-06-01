@@ -30,6 +30,15 @@ NAMES = {
     "3491":"昇達科","6285":"啟碁","2314":"台揚","3178":"公準","6271":"同欣電","3596":"智易",
     "3008":"大立光","3406":"玉晶光","2409":"友達","3481":"群創","2393":"億光","4979":"華星光",
 }
+# ===== 你的持股／觀察清單 =====
+# 格式  代號: 買入成本價   （沒買、只想觀察就填 None）
+# 有填成本 → 會多算「個人停利停損」；填 None → 只顯示通用買賣區間。
+# 範例已先放兩檔，自己照格式增減即可。
+HOLDINGS = {
+    "2330": 1080,   # 台積電，成本 1080（範例）
+    "2454": None,   # 聯發科，只觀察（範例）
+}
+
 # 抓新聞用的關鍵字
 NEWS_QUERIES = ["台股","半導體","台積電","聯準會 利率","AI 伺服器","金融 升息 降息","面板 光電","低軌衛星"]
 NEWS_POOL = 30   # 抓進來分析的新聞數
@@ -216,6 +225,14 @@ h1{font-size:20px;font-weight:600;margin:0 0 4px}
 .news-item:hover .news-title{color:#1a5fb4}
 .news-title{font-size:14px;line-height:1.45}
 .news-meta{font-size:11px;color:#aaa;margin-top:2px}
+.hold-card{border-left:4px solid #1a5fb4}
+.hcard{padding:12px 0;border-top:1px solid #f0eee7}
+.hcard:first-of-type{border-top:none;padding-top:4px}
+.zgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:6px}
+.zbox{background:#f6f5f1;border-radius:8px;padding:8px 10px}
+.zlab{font-size:11px;color:#888}
+.zval{font-size:16px;font-weight:600}
+.pbox{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:13px;background:#eef4fb;border-radius:8px;padding:8px 10px;margin:4px 0 2px}
 """
 def color_class(st): return {"多":"p-good","觀望":"p-warn","空":"p-bad"}[st]
 def label(st): return {"多":"偏多","觀望":"觀望","空":"偏空"}[st]
@@ -231,7 +248,78 @@ def build_news_html(news):
         rows+=f'<a href="{esc(n["link"],quote=True)}" target="_blank" class="news-item"><div class="news-title">{esc(n["title"])}</div><div class="news-meta">{esc(meta)}</div></a>'
     return f'<div class="card news-card"><div class="gname">市場重大新聞</div>{rows}</div>'
 
-def build_html(results, mkt_text, mkt_cls, news_html=""):
+def price_zones(c):
+    """用收盤價算出買賣區間。回傳價位與目前位置。"""
+    px = float(c.iloc[-1])
+    win = c.tail(60)
+    low60 = float(win.min()); high60 = float(win.max())
+    ma20 = float(c.tail(20).mean()); ma60 = float(c.tail(60).mean())
+    buy_low, buy_high = (low60, ma60) if low60 <= ma60 else (ma60, low60)
+    fair = ma20
+    tp   = high60
+    stop = ma60 * 0.92
+    if   px < stop:        pos = "跌破停損"
+    elif px <= buy_high:   pos = "便宜"
+    elif px < tp*0.95:     pos = "合理"
+    elif px < tp:          pos = "偏貴"
+    else:                  pos = "過熱"
+    return {"px":px,"buy_low":buy_low,"buy_high":buy_high,"fair":fair,"tp":tp,"stop":stop,"pos":pos}
+
+def personal_levels(z, cost):
+    px = z["px"]; pl = px/cost - 1.0
+    protect = max(cost*0.90, z["tp"]*0.90)   # 移動保護價：賺了之後跟著前高墊高
+    if   px <= protect:  note = f"已觸及保護價 {round(protect)}，建議出場"
+    elif pl >= 0.20:     note = "獲利 20%↑，可考慮分批停利"
+    elif pl >= 0:        note = f"續抱，保護價 {round(protect)}"
+    else:                note = f"虧損中，停損價 {round(cost*0.90)}"
+    return {"pl":pl, "protect":protect, "note":note}
+
+def _pct(x, lo, hi):
+    if hi<=lo: return 0
+    return max(0, min(100, (x-lo)/(hi-lo)*100))
+
+def build_zone_bar(z):
+    lo = min(z["stop"], z["buy_low"], z["px"]) * 0.99
+    hi = max(z["tp"], z["px"], z["buy_high"]) * 1.01
+    cuts = sorted([z["stop"], z["buy_high"], z["tp"]*0.95, z["tp"]])
+    p = [_pct(lo,lo,hi)] + [_pct(x,lo,hi) for x in cuts] + [_pct(hi,lo,hi)]
+    cols = ["#fbeae8","#e6f4ea","#eceae3","#fdf3e0","#fbeae8"]  # 紅 綠 灰 黃 紅
+    segs=""
+    for i in range(5):
+        w=p[i+1]-p[i]
+        if w>0: segs+=f'<div style="width:{w:.1f}%;background:{cols[i]}"></div>'
+    mk=_pct(z["px"],lo,hi)
+    return (f'<div style="position:relative;margin:30px 0 6px">'
+            f'<div style="position:absolute;left:{mk:.1f}%;top:-24px;transform:translateX(-50%);white-space:nowrap;font-size:12px;font-weight:600">{round(z["px"])} ▼</div>'
+            f'<div style="display:flex;height:18px;border-radius:5px;overflow:hidden">{segs}</div>'
+            f'<div style="position:absolute;left:{mk:.1f}%;top:-2px;width:2px;height:22px;background:#222;transform:translateX(-50%)"></div>'
+            f'</div>')
+
+def build_holdings_html(items):
+    if not items:
+        return ""
+    cards=""
+    for it in items:
+        z=it["zones"]
+        bar=build_zone_bar(z)
+        boxes=(f'<div class="zbox"><div class="zlab">參考買區</div><div class="zval" style="color:#1a7f37">{round(z["buy_low"])}–{round(z["buy_high"])}</div></div>'
+               f'<div class="zbox"><div class="zlab">合理價</div><div class="zval">約 {round(z["fair"])}</div></div>'
+               f'<div class="zbox"><div class="zlab">停利留意</div><div class="zval" style="color:#9a6700">{round(z["tp"])} 以上</div></div>'
+               f'<div class="zbox"><div class="zlab">停損價</div><div class="zval" style="color:#b42318">跌破 {round(z["stop"])}</div></div>')
+        personal=""
+        if it.get("personal"):
+            pinfo=it["personal"]; pl=pinfo["pl"]
+            plcol="#1a7f37" if pl>=0 else "#b42318"
+            personal=(f'<div class="pbox"><span>成本 {round(it["cost"])}　損益 '
+                      f'<span style="color:{plcol};font-weight:600">{"+" if pl>=0 else ""}{pl*100:.1f}%</span></span>'
+                      f'<span style="color:#555">{esc(pinfo["note"])}</span></div>')
+        cards+=(f'<div class="hcard"><div style="display:flex;justify-content:space-between;align-items:baseline">'
+                f'<div style="font-size:15px;font-weight:600">{esc(it["name"])} <span style="color:#aaa;font-size:12px">{esc(it["code"])}</span></div>'
+                f'<div style="font-size:13px;color:#666">目前位置：<b>{z["pos"]}</b></div></div>'
+                f'{bar}{personal}<div class="zgrid">{boxes}</div></div>')
+    return f'<div class="card hold-card"><div class="gname">我的持股／觀察 — 好價格參考</div>{cards}</div>'
+
+def build_html(results, mkt_text, mkt_cls, news_html="", holdings_html=""):
     now=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y/%m/%d %H:%M")
     mkt_color={"good":"#1a7f37","warn":"#9a6700","bad":"#b42318"}[mkt_cls]
     cards=""
@@ -245,7 +333,7 @@ def build_html(results, mkt_text, mkt_cls, news_html=""):
         nt=g["news_tag"]; ag=g["agree"]
         news_line=f'<div class="news-tag">消息面 <span style="color:{news_color(nt)};font-weight:600">{nt}</span> · <span style="color:{agree_color(ag)};font-weight:600">{ag}</span></div>'
         cards+=f'<div class="card"><div class="head"><div style="flex:1;min-width:0"><div class="gname">{esc(g["name"])}</div><div class="gsum">{esc(g["sum"])}</div></div><div style="text-align:right"><span class="pill {color_class(g["status"])}">{label(g["status"])}</span><div class="sc"><span class="{arr_cls}" style="font-size:17px">{g["arrow"]}</span> {g["score"]}分</div>{news_line}</div></div><div>{chips}</div></div>'
-    return f'<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="台股趨勢"><meta name="theme-color" content="#f6f5f1"><link rel="apple-touch-icon" href="icon.png"><title>台股每日趨勢</title><style>{CSS}</style></head><body><div class="wrap"><h1>台股七大組合 · 每日趨勢</h1><div class="sub">更新時間：{now}　·　<span style="color:{mkt_color};font-weight:600">{esc(mkt_text)}</span></div><div class="note">「消息面」是用新聞關鍵字粗略判斷（會漏判或讀錯，僅供參考）。「一致」＝消息面與趨勢同向；「背離」＝兩者相反，要提高警覺（可能利多出盡或利空鈍化），請以趨勢面為主。</div>{news_html}{cards}<div class="legend"><span class="up">●</span> 偏多/上漲　<span class="flat">●</span> 觀望/盤整　<span class="down">●</span> 偏空/下跌</div><div class="foot">股價來源：Yahoo Finance；新聞來源：Google 新聞（個人用途）。本表為自動計算之參考訊號，非投資建議；過去走勢不代表未來，投資決策與風險請自行評估。</div></div></body></html>'
+    return f'<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="台股趨勢"><meta name="theme-color" content="#f6f5f1"><link rel="apple-touch-icon" href="icon.png"><title>台股每日趨勢</title><style>{CSS}</style></head><body><div class="wrap"><h1>台股七大組合 · 每日趨勢</h1><div class="sub">更新時間：{now}　·　<span style="color:{mkt_color};font-weight:600">{esc(mkt_text)}</span></div><div class="note">「消息面」是用新聞關鍵字粗略判斷（會漏判或讀錯，僅供參考）。「一致」＝消息面與趨勢同向；「背離」＝兩者相反，要提高警覺（可能利多出盡或利空鈍化），請以趨勢面為主。</div>{news_html}{holdings_html}{cards}<div class="legend"><span class="up">●</span> 偏多/上漲　<span class="flat">●</span> 觀望/盤整　<span class="down">●</span> 偏空/下跌</div><div class="foot">股價來源：Yahoo Finance；新聞來源：Google 新聞（個人用途）。本表為自動計算之參考訊號，非投資建議；過去走勢不代表未來，投資決策與風險請自行評估。</div></div></body></html>'
 
 def main():
     print("開始抓取新聞與最新股價…（約需 1~2 分鐘）")
@@ -275,7 +363,22 @@ def main():
                         "stocks":stocks,"news_tag":ntag,"agree":agree_flag(gstatus,ntag)})
     results.sort(key=lambda x:x["score"], reverse=True)
     mkt_text, mkt_cls = market_status()
-    html=build_html(results, mkt_text, mkt_cls, news_html)
+
+    # 持股／觀察清單的好價格
+    hold_items=[]
+    for code, cost in HOLDINGS.items():
+        if code not in cache:
+            cache[code]=fetch(code); time.sleep(0.3)
+        c=cache[code]
+        if c is None: continue
+        z=price_zones(c)
+        item={"name":NAMES.get(code,code),"code":code,"zones":z,"cost":cost}
+        if cost:
+            item["personal"]=personal_levels(z, float(cost))
+        hold_items.append(item)
+    holdings_html=build_holdings_html(hold_items)
+
+    html=build_html(results, mkt_text, mkt_cls, news_html, holdings_html)
     out_name = os.environ.get("OUT_FILE", "dashboard.html")
     out=os.path.join(os.path.dirname(os.path.abspath(__file__)), out_name)
     open(out,"w",encoding="utf-8").write(html)
