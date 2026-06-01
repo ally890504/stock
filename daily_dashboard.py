@@ -19,7 +19,7 @@ import requests
 import yfinance as yf
 
 # ==================== [ 雲端試算表設定 ] ====================
-SHEET_ID = "貼上你的Google試算表ID"  # 👈 請在此處貼上你的試算表 ID
+SHEET_ID = "1BgoxBaTziSbMp0F5DiOCVzS3qBt0RKp33UkJluU3YCE/edit?gid=0#gid=0"  # 👈 請在此處貼上你的試算表 ID
 SHEET_NAME = "stocks"
 
 # 萬一試算表抓不到時的「備援清單」，避免每日排程整個掛掉
