@@ -144,32 +144,46 @@ GITHUB_BRANCH = "main"
 
 
 def load_from_sheets():
-    """從 Google 試算表動態載入股票、名稱、分類、以及個人成本"""
+    """從 Google 試算表載入股票、名稱、分類、成本；欄位缺漏也不會崩潰"""
     url = (
         f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
         f"/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
     )
     try:
-        # dtype={'ticker': str} 確保 0050 的 0 不會消失
-        df = pd.read_csv(url, dtype={"ticker": str})
-        
-        # 清除欄位名稱的空白符號，確保後續讀取順利
+        # 全欄位都當字串讀，徹底避免 0050 的開頭 0 被吃掉
+        df = pd.read_csv(url, dtype=str)
+
+        # 清除欄位名稱前後空白，確保後續比對得到
         df.columns = df.columns.str.strip()
-        
-        # 排除 ticker 欄位為空值的資料列
+
+        if "ticker" not in df.columns:
+            raise ValueError(f"找不到 ticker 欄位，實際欄位：{list(df.columns)}")
+
+        # 排除 ticker 為空的資料列
         df = df.dropna(subset=["ticker"])
         df["ticker"] = df["ticker"].astype(str).str.strip()
-        
+        df = df[df["ticker"] != ""]
         if df.empty:
             raise ValueError("試算表裡沒有任何股票資料")
 
-        # 處理 cost 欄位，轉為數值型態，無法轉換的會變成 NaN
+        # ---- 欄位防呆：缺哪個就補哪個，避免 main() 後續 KeyError ----
+        if "name" not in df.columns:
+            df["name"] = df["ticker"]
+        df["name"] = df["name"].fillna(df["ticker"]).astype(str).str.strip()
+        df.loc[df["name"] == "", "name"] = df["ticker"]
+
+        if "category" not in df.columns:
+            df["category"] = "未分類"
+        df["category"] = df["category"].fillna("未分類").astype(str).str.strip()
+        df.loc[df["category"] == "", "category"] = "未分類"
+
+        # cost 轉數值，無法轉換或留空的會變成 NaN（代表未填成本）
         if "cost" in df.columns:
             df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
         else:
-            df["cost"] = None
+            df["cost"] = pd.NA
 
-        print(f"成功從雲端下載 {len(df)} 檔股票資料！")
+        print(f"成功從雲端下載 {len(df)} 檔股票資料！實際欄位：{list(df.columns)}")
         return df
     except Exception as e:
         print(f"[warn] 讀取 Google 試算表失敗，改用備援資料: {e}")
