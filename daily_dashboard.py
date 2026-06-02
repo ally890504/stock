@@ -145,9 +145,13 @@ GITHUB_BRANCH = "main"
 
 def load_from_sheets():
     """從 Google 試算表載入股票、名稱、分類、成本；欄位缺漏也不會崩潰"""
+    # 用標準 CSV 匯出端點，比 gviz 穩定：回傳乾淨的逗號分隔資料、且包含全部列。
+    # gid=0 代表第一個分頁；若你的 stocks 分頁不是第一個，
+    # 點該分頁後看網址列「#gid=」後面那串數字，把 0 換成它即可。
+    GID = "0"
     url = (
         f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-        f"/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+        f"/export?format=csv&gid={GID}"
     )
     try:
         # 全欄位都當字串讀，徹底避免 0050 的開頭 0 被吃掉
