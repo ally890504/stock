@@ -589,6 +589,10 @@ def build_news_summary(news, mkt_text):
         f'<div class="gsum" style="margin-top:10px">📌 熱門話題：{esc(theme_txt)}</div>'
         f"{beginner}</div>"
     )
+
+
+def price_zones(c):
+    px = float(c.iloc[-1])
     win = c.tail(60)
     low60 = float(win.min())
     high60 = float(win.max())
